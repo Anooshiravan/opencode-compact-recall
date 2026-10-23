@@ -1,10 +1,12 @@
 {
   "name": "opencode-compact-recall",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Remembers every compaction summary and lets the agent semantically recall what was discussed in past sessions",
   "license": "MIT",
   "type": "module",
-  "scripts": { "test": "bun test" },
+  "scripts": {
+    "test": "bun test"
+  },
   "dependencies": {
     "@huggingface/transformers": "^3.7.0",
     "@opencode/plugin": "^2.0.0"
