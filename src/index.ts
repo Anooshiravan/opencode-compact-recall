@@ -45,7 +45,21 @@ export default Plugin.define({
       }
     }
 
+    const catchUp = async () => {
+      try {
+        const since = store.lastSaved()
+        const page: any = await (ctx.session as any).list({ limit: 50 })
+        for (const session of page.data ?? page ?? []) {
+          const s = session as any
+          const id = s.sessionID ?? s.id
+          if (id && (s.time?.updated ?? 0) > since) await capture(id)
+        }
+      } catch {}
+    }
+
     const abort = new AbortController()
+    await catchUp()
+    const timer = setInterval(() => void catchUp(), 60_000)
     void (async () => {
       while (!abort.signal.aborted) {
         try {
@@ -75,7 +89,7 @@ export default Plugin.define({
           required: ["query"],
           additionalProperties: false,
         },
-        execute: async ({ query, limit = 5 }) => {
+        execute: async ({ query, limit = 5 }: any) => {
           try {
             const hits = await store.search(query, limit)
             return { content: hits.length ? JSON.stringify(hits, null, 2) : "No matching memories." }
@@ -97,8 +111,16 @@ export default Plugin.define({
           required: ["title", "text"],
           additionalProperties: false,
         },
-        execute: async ({ title, text }) => {
+        execute: async ({ title, text }: any, context: any) => {
           try {
+            await ctx.permission.assert({
+              sessionID: context.sessionID,
+              agent: context.agent,
+              source: { type: "tool", messageID: context.messageID, id: context.id },
+              action: "compact_recall_save",
+              resources: [title],
+              save: [title],
+            })
             const memory_id = slug(title)
             if (store.isSystem(memory_id)) return { content: "Refused: memory_id belongs to a system compaction." }
             if (store.exists(memory_id)) return { content: `Refused: a note with this title already exists (${memory_id}). Use compact_recall_update to change it.` }
@@ -132,8 +154,16 @@ export default Plugin.define({
           required: ["memory_id", "title", "text"],
           additionalProperties: false,
         },
-        execute: async ({ memory_id, title, text }) => {
+        execute: async ({ memory_id, title, text }: any, context: any) => {
           try {
+            await ctx.permission.assert({
+              sessionID: context.sessionID,
+              agent: context.agent,
+              source: { type: "tool", messageID: context.messageID, id: context.id },
+              action: "compact_recall_update",
+              resources: [memory_id],
+              save: [memory_id],
+            })
             if (store.isSystem(memory_id)) return { content: "Refused: memory_id belongs to a system compaction." }
             const existing = await store.get(memory_id)
             if (!existing) return { content: `Note "${memory_id}" not found. Use compact_recall_save to create one.` }
@@ -183,7 +213,7 @@ export default Plugin.define({
           required: ["memory_id"],
           additionalProperties: false,
         },
-        execute: async ({ memory_id }) => {
+        execute: async ({ memory_id }: any) => {
           try {
             const memory = await store.get(memory_id)
             return { content: memory ? JSON.stringify(memory, null, 2) : "Memory not found." }
@@ -194,6 +224,10 @@ export default Plugin.define({
       })
     })
 
-    return () => abort.abort()
+    return () => {
+      clearInterval(timer)
+      abort.abort()
+      store.close()
+    }
   },
 })

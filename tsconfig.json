@@ -2,9 +2,10 @@
   "compilerOptions": {
     "target": "esnext",
     "module": "esnext",
-    "moduleResolution": "bun",
+    "moduleResolution": "bundler",
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true
-  }
+  },
+  "include": ["src"]
 }

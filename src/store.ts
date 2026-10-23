@@ -42,6 +42,14 @@ export class Store {
     this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(chunk_text, content='', contentless_delete=1)`)
   }
 
+  close() {
+    this.db.close()
+  }
+
+  lastSaved(): number {
+    return (this.db.query("SELECT MAX(created_at) m FROM chunks").get() as any)?.m ?? 0
+  }
+
   async save(memory: Memory) {
     const chunks = chunk(memory.full_text)
     const vectors = await embed(chunks)
