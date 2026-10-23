@@ -40,10 +40,15 @@ stored in a SQLite database. No server, no API keys.
 
 ## Tools
 
-- `compact_recall_search` — hybrid semantic + keyword search. Args:
-  `query`, `limit` (5), `all_projects` (false, current project only).
-  Returns `score` (calibrated) and `relative` (vs top hit) per summary.
-- `compact_recall_get` — full summary by `summary_id`.
+- `compact_recall_search` — hybrid semantic + keyword search over all
+  memories. Args: `query`, `limit` (5). Returns `score` (calibrated) and
+  `relative` (vs top hit) per hit, plus its `status`.
+- `compact_recall_save` — create a note (idea/plan). Fails if the title
+  exists; notes are never deleted.
+- `compact_recall_update` — replace a note's full text/status by
+  `memory_id`. Retire with `status: dropped` or `superseded`.
+- `compact_recall_get` — full text by `memory_id`.
+- `compact_recall_inventory` — counts by source and status.
 
 ## Config
 
@@ -53,5 +58,5 @@ stored in a SQLite database. No server, no API keys.
 | `COMPACT_RECALL_MODEL`       | `Xenova/bge-small-en-v1.5`             |
 | `COMPACT_RECALL_MIN_SCORE`   | `0.5`                                  |
 | `COMPACT_RECALL_BASELINE`    | `0.3` (calibration offset)             |
-| `COMPACT_RECALL_DEBUG`       | off — path to a debug log file         |
+| `COMPACT_RECALL_LOG`         | `~/.local/share/opencode/compact-recall.log` |
 | `COMPACT_RECALL_ENABLED`     | `true`                                 |

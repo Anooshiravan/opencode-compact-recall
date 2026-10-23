@@ -4,5 +4,5 @@ export const config = {
   minScore: Number(process.env.COMPACT_RECALL_MIN_SCORE ?? 0.5),
   baseline: Number(process.env.COMPACT_RECALL_BASELINE ?? 0.3),
   enabled: (process.env.COMPACT_RECALL_ENABLED ?? "true") !== "false",
-  debug: process.env.COMPACT_RECALL_DEBUG ?? "",
+  log: process.env.COMPACT_RECALL_LOG ?? `${process.env.HOME}/.local/share/opencode/compact-recall.log`,
 }

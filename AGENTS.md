@@ -1,28 +1,24 @@
 # Install (for agents)
 
-1. Install dependencies (from this repo):
-
-   ```bash
-   bun install
-   ```
-
-2. Register the plugin in `~/.config/opencode/opencode.json` — add the
-   absolute path of this repo to the `plugin` array (or use the npm
-   package name `opencode-compact-recall` once published):
+1. Register the plugin in `~/.config/opencode/opencode.json`:
 
    ```json
-   { "plugin": ["/ABSOLUTE/PATH/TO/THIS/REPO"] }
+   { "plugin": ["opencode-compact-recall"] }
    ```
 
-3. Restart the opencode server so the plugin loads:
+   (For development from a local clone instead, add the repo's absolute
+   path to the array and run `bun install` inside it.)
+
+2. Restart the opencode server so the plugin loads:
 
    ```bash
    opencode service restart
    ```
 
-4. Verify: in any opencode session, ask it to recall a past conversation
+3. Verify: in any opencode session, ask it to recall a past conversation
    after a `/compact` has occurred. The agent should call
-   `compact_recall_search` and return a summary.
+   `compact_recall_search` and return a summary. You can also ask it to
+   run `compact_recall_inventory` to see what is stored.
 
 Notes:
 

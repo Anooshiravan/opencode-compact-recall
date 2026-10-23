@@ -1,9 +1,13 @@
 import { expect, test } from "bun:test"
-import { rowId, summaryId } from "../src/ids"
+import { rowId, slug } from "../src/ids"
 
-test("summary id is stable and message-specific", () => {
-  expect(summaryId("s", "m1")).toBe(summaryId("s", "m1"))
-  expect(summaryId("s", "m1")).not.toBe(summaryId("s", "m2"))
+test("slug is stable kebab-case", () => {
+  expect(slug("Hello, World!")).toBe("hello-world")
+  expect(slug("My Brain Design")).toBe("my-brain-design")
+})
+
+test("slug falls back to hash when empty", () => {
+  expect(slug("🚀")).toMatch(/^[0-9a-f]{12}$/)
 })
 
 test("row id is deterministic and positive", () => {

@@ -5,13 +5,14 @@ import { chunk } from "./chunk"
 import { config } from "./config"
 import { embed, embedQuery } from "./embed"
 import { rowId } from "./ids"
-import type { Summary } from "./capture"
+import type { Memory } from "./capture"
 
 export interface Hit {
-  summary_id: string
+  memory_id: string
   title: string
   directory: string
   created_at: number
+  status: string
   score: number
   relative: number
   chunk_text: string
@@ -32,50 +33,58 @@ export class Store {
     this.db.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS chunks (
-        id INTEGER PRIMARY KEY, summary_id TEXT NOT NULL, chunk_index INTEGER NOT NULL,
-        chunk_text TEXT NOT NULL, session_id TEXT NOT NULL, message_id TEXT NOT NULL,
-        title TEXT NOT NULL, project TEXT NOT NULL, directory TEXT NOT NULL,
-        created_at INTEGER NOT NULL, reason TEXT NOT NULL, text TEXT NOT NULL,
-        vector BLOB NOT NULL)`,
+        memory_id TEXT NOT NULL, chunk_index INTEGER NOT NULL,
+        chunk_text TEXT NOT NULL, title TEXT NOT NULL, directory TEXT NOT NULL,
+        created_at INTEGER NOT NULL, status TEXT NOT NULL, compaction_reason TEXT NOT NULL,
+        full_text TEXT NOT NULL, vector BLOB NOT NULL,
+        PRIMARY KEY (memory_id, chunk_index))`,
     )
-    this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(chunk_text, content='chunks', content_rowid='id')`)
+    this.db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(chunk_text, content='', contentless_delete=1)`)
   }
 
-  async save(summary: Summary) {
-    const chunks = chunk(summary.text)
+  async save(memory: Memory) {
+    const chunks = chunk(memory.full_text)
     const vectors = await embed(chunks)
     this.ensureDims(vectors[0].length)
     const insert = this.db.prepare(
       `INSERT OR REPLACE INTO chunks
-       (id, summary_id, chunk_index, chunk_text, session_id, message_id, title, project, directory, created_at, reason, text, vector)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (memory_id, chunk_index, chunk_text, title, directory, created_at, status, compaction_reason, full_text, vector)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     this.db.transaction(() => {
-      this.db.query("DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE session_id = ?)").run(summary.session_id)
-      this.db.query("DELETE FROM chunks WHERE session_id = ?").run(summary.session_id)
+      const old = this.db
+        .query("SELECT chunk_index, chunk_text FROM chunks WHERE memory_id = ?")
+        .all(memory.memory_id) as any[]
+      old.forEach((r) => this.db.query("DELETE FROM chunks_fts WHERE rowid = ?").run(rowId(memory.memory_id, r.chunk_index)))
+      this.db.query("DELETE FROM chunks WHERE memory_id = ?").run(memory.memory_id)
       chunks.forEach((chunk_text, i) => {
-        this.db.query("INSERT INTO chunks_fts (rowid, chunk_text) VALUES (?, ?)").run(rowId(summary.summary_id, i), chunk_text)
+        this.db.query("INSERT INTO chunks_fts(rowid, chunk_text) VALUES (?, ?)").run(rowId(memory.memory_id, i), chunk_text)
         insert.run(
-          rowId(summary.summary_id, i), summary.summary_id, i, chunk_text, summary.session_id, summary.message_id,
-          summary.title, summary.project, summary.directory, summary.created_at, summary.reason, summary.text,
+          memory.memory_id, i, chunk_text, memory.title, memory.directory, memory.created_at,
+          memory.status, memory.compaction_reason, memory.full_text,
           Buffer.from(new Float32Array(vectors[i]).buffer),
         )
       })
     })()
   }
 
-  async search(query: string, limit: number, project?: string): Promise<Hit[]> {
+  exists(memory_id: string) {
+    return !!this.db.query("SELECT 1 FROM chunks WHERE memory_id = ? LIMIT 1").get(memory_id)
+  }
+
+  isSystem(memory_id: string) {
+    return (this.db.query("SELECT status = 'system_compact' s FROM chunks WHERE memory_id = ? LIMIT 1").get(memory_id) as any)?.s === 1
+  }
+
+  async search(query: string, limit: number): Promise<Hit[]> {
     const q = new Float32Array(await embedQuery(query))
-    const where = project ? "WHERE project = ?" : ""
-    const rows = this.db
-      .query(`SELECT summary_id, title, directory, created_at, chunk_text, vector FROM chunks ${where}`)
-      .all(...(project ? [project] : [])) as any[]
+    const rows = this.db.query("SELECT memory_id, title, directory, created_at, status, chunk_text, vector FROM chunks").all() as any[]
     const groups = new Map<string, { row: any; scores: number[] }>()
     for (const row of rows) {
       const score = cosine(q, new Float32Array(row.vector.buffer))
-      const g = groups.get(row.summary_id) ?? { row, scores: [] }
+      const g = groups.get(row.memory_id) ?? { row, scores: [] }
       g.scores.push(score)
-      groups.set(row.summary_id, g)
+      groups.set(row.memory_id, g)
     }
     const sem = [...groups.values()]
       .map((g) => {
@@ -85,53 +94,66 @@ export class Store {
       })
       .filter((g) => g.raw >= config.minScore)
       .sort((a, b) => b.raw - a.raw)
-    const kw = this.keyword(query, project)
     const rrf = new Map<string, { row: any; raw: number; score: number }>()
-    for (const [rank, g] of sem.entries()) {
-      const e = rrf.get(g.row.summary_id) ?? { row: g.row, raw: g.raw, score: 0 }
-      e.score += 1 / (60 + rank + 1)
-      rrf.set(g.row.summary_id, e)
-    }
-    for (const [rank, row] of kw.entries()) {
-      const g = groups.get(row.summary_id)
+    for (const [rank, g] of sem.entries()) rrf.set(g.row.memory_id, { row: g.row, raw: g.raw, score: 1 / (60 + rank + 1) })
+    for (const [rank, row] of this.keyword(query).entries()) {
+      const g = groups.get(row.memory_id)
       if (!g) continue
-      const e = rrf.get(row.summary_id) ?? { row: g.row, raw: 0, score: 0 }
+      const e = rrf.get(row.memory_id) ?? { row: g.row, raw: 0, score: 0 }
       e.score += 1 / (60 + rank + 1)
-      rrf.set(row.summary_id, e)
+      rrf.set(row.memory_id, e)
     }
     const scored = [...rrf.values()].sort((a, b) => b.score - a.score).slice(0, limit)
     const topScore = scored[0]?.score ?? 1
     return scored.map((g) => ({
-      summary_id: g.row.summary_id, title: g.row.title, directory: g.row.directory,
-      created_at: g.row.created_at, score: +(g.raw - config.baseline).toFixed(3),
+      memory_id: g.row.memory_id, title: g.row.title, directory: g.row.directory,
+      created_at: g.row.created_at, status: g.row.status,
+      score: +(g.raw - config.baseline).toFixed(3),
       relative: +(g.score / topScore).toFixed(2), chunk_text: g.row.chunk_text,
     }))
   }
 
-  private keyword(query: string, project?: string): any[] {
+  private keyword(query: string): any[] {
     const terms = query.match(/[\p{L}\p{N}][\p{L}\p{N}._-]{2,}/gu)?.slice(0, 8).map((t) => `"${t}"`)
     if (!terms?.length) return []
     try {
-      return this.db
-        .query(
-          `SELECT c.summary_id, c.title, c.directory, c.created_at, c.chunk_text
-           FROM chunks_fts f JOIN chunks c ON c.id = f.rowid
-           WHERE chunks_fts MATCH ? ${project ? "AND c.project = ?" : ""}
-           ORDER BY bm25(chunks_fts) LIMIT 20`,
-        )
-        .all(terms.join(" OR "), ...(project ? [project] : [])) as any[]
+      const ids = this.db
+        .query(`SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY bm25(chunks_fts) LIMIT 20`)
+        .all(terms.join(" OR ")) as any[]
+      if (!ids.length) return []
+      const wanted = ids.map((i) => Number(i.rowid))
+      const byId = new Map(
+        (this.db.query("SELECT * FROM chunks").all() as any[]).map((r) => [Number(rowId(r.memory_id, r.chunk_index)), r]),
+      )
+      return wanted.map((id) => byId.get(id)).filter(Boolean)
     } catch {
       return []
     }
   }
 
-  async get(summaryID: string): Promise<Summary | undefined> {
+  inventory() {
+    const rows = this.db
+      .query("SELECT DISTINCT memory_id, status FROM chunks")
+      .all() as any[]
+    const sources = ["opencode", "claude", "manual"]
+    const statuses = ["system_compact", "idea", "plan", "active", "dropped", "superseded"]
+    const table: Record<string, Record<string, number | null>> = {}
+    for (const s of sources) {
+      table[s] = {}
+      for (const st of statuses) table[s][st] = null
+    }
+    for (const r of rows) {
+      const src = r.memory_id.startsWith("ses_") ? "opencode" : r.memory_id.startsWith("claude-") ? "claude" : "manual"
+      if (table[src][r.status] === null) table[src][r.status] = 0
+      table[src][r.status]!++
+    }
+    return { table, total: rows.length }
+  }
+
+  async get(memoryID: string): Promise<Memory | undefined> {
     return (this.db
-      .query(
-        `SELECT summary_id, session_id, message_id, title, project, directory, created_at, reason, text
-         FROM chunks WHERE summary_id = ? LIMIT 1`,
-      )
-      .get(summaryID) as Summary | undefined) ?? undefined
+      .query("SELECT memory_id, title, directory, created_at, status, compaction_reason, full_text FROM chunks WHERE memory_id = ? LIMIT 1")
+      .get(memoryID) as Memory | undefined) ?? undefined
   }
 
   private ensureDims(dims: number) {
