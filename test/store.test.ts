@@ -88,10 +88,20 @@ test("inventory counts by source and status", async () => {
   expect(table.manual.system_compact).toBeNull()
 })
 
+test("search hides retired notes unless includeHistory", async () => {
+  const store = await tempStore()
+  await store.save(memory({ full_text: "## A\nhello" }))
+  await store.save(memory({ memory_id: "old", status: "superseded", full_text: "## A\nhello" }))
+  await store.save(memory({ memory_id: "dead", status: "dropped", full_text: "## A\nhello" }))
+  expect((await store.search("hello", 5)).map((h) => h.memory_id)).toEqual(["abc"])
+  const all = await store.search("hello", 5, true)
+  expect(all.map((h) => h.memory_id).sort()).toEqual(["abc", "dead", "old"])
+})
+
 test("keyword-only hit survives weak semantics", async () => {
   const store = await tempStore()
-  await store.save(memory({ memory_id: "gpu", full_text: "## A\nH200 vLLM deploy" }))
-  const hits = await store.search("zzz H200", 5)
+  await store.save(memory({ memory_id: "gpu", full_text: "## A\nblue toaster repair" }))
+  const hits = await store.search("zzz toaster", 5)
   expect(hits.map((h) => h.memory_id)).toEqual(["gpu"])
 })
 

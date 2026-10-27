@@ -78,20 +78,21 @@ export default Plugin.define({
     await ctx.tool.transform((editor) => {
       editor.add({
         name: "compact_recall_search",
-        description: "Semantically search stored memories: summaries of past (compacted) conversations and saved notes/ideas/plans. Use when asked to recall what was discussed, decided or done in earlier sessions. Results include a status field; treat dropped/superseded as history, not current truth.",
+        description: "Semantically search stored memories: summaries of past (compacted) conversations and saved notes/ideas/plans. Use when asked to recall what was discussed, decided or done in earlier sessions. Retired notes (dropped/superseded) are excluded by default; pass includeHistory: true to search them too.",
         options: { codemode: false },
         input: {
           type: "object",
           properties: {
             query: { type: "string" },
             limit: { type: "number" },
+            includeHistory: { type: "boolean" },
           },
           required: ["query"],
           additionalProperties: false,
         },
-        execute: async ({ query, limit = 5 }: any) => {
+        execute: async ({ query, limit = 5, includeHistory = false }: any) => {
           try {
-            const hits = await store.search(query, limit)
+            const hits = await store.search(query, limit, includeHistory)
             return { content: hits.length ? JSON.stringify(hits, null, 2) : "No matching memories." }
           } catch (e) {
             return { content: `Search failed: ${e instanceof Error ? e.message : e}` }
@@ -112,15 +113,15 @@ export default Plugin.define({
           additionalProperties: false,
         },
         execute: async ({ title, text }: any, context: any) => {
+          await ctx.permission.assert({
+            sessionID: context.sessionID,
+            agent: context.agent,
+            source: { type: "tool", messageID: context.messageID, id: context.id },
+            action: "compact_recall_save",
+            resources: [title],
+            save: [title],
+          })
           try {
-            await ctx.permission.assert({
-              sessionID: context.sessionID,
-              agent: context.agent,
-              source: { type: "tool", messageID: context.messageID, id: context.id },
-              action: "compact_recall_save",
-              resources: [title],
-              save: [title],
-            })
             const memory_id = slug(title)
             if (store.isSystem(memory_id)) return { content: "Refused: memory_id belongs to a system compaction." }
             if (store.exists(memory_id)) return { content: `Refused: a note with this title already exists (${memory_id}). Use compact_recall_update to change it.` }
@@ -142,7 +143,7 @@ export default Plugin.define({
       })
       editor.add({
         name: "compact_recall_update",
-        description: 'Update an existing note by memory_id (from compact_recall_search). Fails if it does not exist. Pass the FULL new text (no partial edits), keeping the frontmatter block: "---\\nstatus: idea\\n---\\nbody". status: idea | plan | active | dropped | superseded. To retire a note, set status: dropped (dead end) or superseded (replaced — say by what and why in the body). Notes are never deleted.',
+        description: 'Update an existing note by memory_id (from compact_recall_search). Fails if it does not exist. Pass the FULL new text (no partial edits), keeping the frontmatter block: "---\\nstatus: idea\\n---\\nbody". status: idea | plan | active | dropped | superseded. To retire a note, set status: dropped (dead end) or superseded (replaced — say by what and why in the body). System compactions may only be set to dropped or superseded. Notes are never deleted. To merge notes on one subject: save the merged note, then update each source to superseded (mention the merged note id). Never merge without user approval.',
         options: { codemode: false },
         input: {
           type: "object",
@@ -155,19 +156,20 @@ export default Plugin.define({
           additionalProperties: false,
         },
         execute: async ({ memory_id, title, text }: any, context: any) => {
+          await ctx.permission.assert({
+            sessionID: context.sessionID,
+            agent: context.agent,
+            source: { type: "tool", messageID: context.messageID, id: context.id },
+            action: "compact_recall_update",
+            resources: [memory_id],
+            save: [memory_id],
+          })
           try {
-            await ctx.permission.assert({
-              sessionID: context.sessionID,
-              agent: context.agent,
-              source: { type: "tool", messageID: context.messageID, id: context.id },
-              action: "compact_recall_update",
-              resources: [memory_id],
-              save: [memory_id],
-            })
-            if (store.isSystem(memory_id)) return { content: "Refused: memory_id belongs to a system compaction." }
             const existing = await store.get(memory_id)
             if (!existing) return { content: `Note "${memory_id}" not found. Use compact_recall_save to create one.` }
             const { status, body } = parseNote(text)
+            if (store.isSystem(memory_id) && status !== "dropped" && status !== "superseded")
+              return { content: "Refused: system compactions may only be set to dropped or superseded." }
             await store.save({
               memory_id,
               title,

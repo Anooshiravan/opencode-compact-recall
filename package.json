@@ -1,6 +1,6 @@
 {
   "name": "opencode-compact-recall",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Remembers every compaction summary and lets the agent semantically recall what was discussed in past sessions",
   "license": "MIT",
   "type": "module",

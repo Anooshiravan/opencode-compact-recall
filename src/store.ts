@@ -84,9 +84,15 @@ export class Store {
     return (this.db.query("SELECT status = 'system_compact' s FROM chunks WHERE memory_id = ? LIMIT 1").get(memory_id) as any)?.s === 1
   }
 
-  async search(query: string, limit: number): Promise<Hit[]> {
+  async search(query: string, limit: number, includeHistory = false): Promise<Hit[]> {
     const q = new Float32Array(await embedQuery(query))
-    const rows = this.db.query("SELECT memory_id, title, directory, created_at, status, chunk_text, vector FROM chunks").all() as any[]
+    const rows = this.db
+      .query(
+        `SELECT memory_id, title, directory, created_at, status, chunk_text, vector FROM chunks${
+          includeHistory ? "" : " WHERE status NOT IN ('superseded', 'dropped')"
+        }`,
+      )
+      .all() as any[]
     const groups = new Map<string, { row: any; scores: number[] }>()
     for (const row of rows) {
       const score = cosine(q, new Float32Array(row.vector.buffer))
